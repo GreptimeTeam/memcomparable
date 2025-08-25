@@ -12,13 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use memcomparable::Serializer;
+use serde::Serializer as _;
 
-criterion_group!(benches, decimal);
+criterion_group!(benches, decimal, bytes);
 criterion_main!(benches);
 
 #[cfg(not(feature = "decimal"))]
 fn decimal(_c: &mut Criterion) {}
+
+fn bytes(c: &mut Criterion) {
+    let mut group = c.benchmark_group("bytes");
+
+    for size in [10, 100, 1000] {
+        let bytes = (0..size).map(|_| rand::random::<u8>()).collect::<Vec<_>>();
+        group.bench_function(format!("size-{}", size), |b| {
+            b.iter(|| {
+                let mut s = Serializer::new(Vec::with_capacity(size / 8 * 9));
+                s.serialize_bytes(&bytes).unwrap();
+                black_box(s);
+            });
+        });
+    }
+    group.finish();
+}
 
 #[cfg(feature = "decimal")]
 fn decimal(c: &mut Criterion) {
