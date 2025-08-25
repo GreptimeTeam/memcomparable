@@ -79,12 +79,38 @@ impl<B: BufMut> MaybeFlip<B> {
     def_method!(put_u128, u128);
 
     fn put_slice(&mut self, src: &[u8]) {
-        // fast path
         if !self.flip {
-            self.output.put_slice(src);
+            let num_chunks = src.len() / 8;
+            let remainder = src.len() % 8;
+            let mut tmp = [0u8; 8];
+            for chunk in 0..num_chunks {
+                for idx in 0..8 {
+                    tmp[idx] = src[chunk * 8 + idx];
+                }
+                self.output.put_slice(&tmp);
+            }
+            if remainder != 0 {
+                for idx in 0..remainder {
+                    tmp[idx] = src[num_chunks * 8 + idx];
+                }
+                self.output.put_slice(&tmp[0..remainder]);
+            }
         } else {
-            for &val in src {
-                self.output.put_u8(!val);
+            let num_chunks = src.len() / 8;
+            let remainder = src.len() % 8;
+            let mut tmp = [0u8; 8];
+            for chunk in 0..num_chunks {
+                for idx in 0..8 {
+                    tmp[idx] = !src[chunk * 8 + idx];
+                }
+                self.output.put_slice(&tmp);
+            }
+
+            if remainder != 0 {
+                for idx in 0..remainder {
+                    tmp[idx] = !src[num_chunks * 8 + idx];
+                }
+                self.output.put_slice(&tmp[0..remainder]);
             }
         }
     }

@@ -34,6 +34,15 @@ fn bytes(c: &mut Criterion) {
                 black_box(s);
             });
         });
+
+        group.bench_function(format!("size-{}-reverse", size), |b| {
+            b.iter(|| {
+                let mut s = Serializer::new(Vec::with_capacity(size / 8 * 9));
+                s.set_reverse(true);
+                s.serialize_bytes(&bytes).unwrap();
+                black_box(s);
+            });
+        });
     }
     group.finish();
 }
