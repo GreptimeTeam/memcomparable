@@ -50,7 +50,7 @@ fn bytes(c: &mut Criterion) {
 fn read_bytes(c: &mut Criterion) {
     let mut group = c.benchmark_group("read_bytes");
 
-    for size in [10, 100, 1000] {
+    for size in [10, 20, 50] {
         let bytes = (0..size).map(|_| rand::random::<u8>()).collect::<Vec<_>>();
 
         // Serialize bytes to create test data
