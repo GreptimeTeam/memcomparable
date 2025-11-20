@@ -125,7 +125,17 @@ impl<B: Buf> MaybeFlip<B> {
 }
 
 impl<B: Buf> Deserializer<B> {
-    fn read_bytes(&mut self) -> Result<Vec<u8>> {
+    /// Read a byte array from the deserializer.
+    ///
+    /// This method deserializes a byte array that was previously serialized
+    /// using the memcomparable format. It handles both empty and non-empty
+    /// byte arrays, and respects the reverse encoding flag if set.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Vec<u8>)` containing the deserialized bytes, or an error
+    /// if the encoding is invalid.
+    pub fn read_bytes(&mut self) -> Result<Vec<u8>> {
         match self.input.get_u8() {
             0 => return Ok(vec![]), // empty slice
             1 => {}                 // non-empty slice

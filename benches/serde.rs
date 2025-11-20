@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use memcomparable::Serializer;
+use memcomparable::{Deserializer, Serializer};
 use serde::Serializer as _;
 
-criterion_group!(benches, decimal, bytes);
+criterion_group!(benches, decimal, bytes, read_bytes);
 criterion_main!(benches);
 
 #[cfg(not(feature = "decimal"))]
@@ -41,6 +41,41 @@ fn bytes(c: &mut Criterion) {
                 s.set_reverse(true);
                 s.serialize_bytes(&bytes).unwrap();
                 black_box(s);
+            });
+        });
+    }
+    group.finish();
+}
+
+fn read_bytes(c: &mut Criterion) {
+    let mut group = c.benchmark_group("read_bytes");
+
+    for size in [10, 100, 1000] {
+        let bytes = (0..size).map(|_| rand::random::<u8>()).collect::<Vec<_>>();
+
+        // Serialize bytes to create test data
+        let mut ser = Serializer::new(Vec::with_capacity(size / 8 * 9));
+        ser.serialize_bytes(&bytes).unwrap();
+        let encoded = ser.into_inner();
+
+        group.bench_function(format!("size-{}", size), |b| {
+            b.iter(|| {
+                let mut de = Deserializer::new(black_box(encoded.as_slice()));
+                black_box(de.read_bytes().unwrap());
+            });
+        });
+
+        // Test with reverse encoding
+        let mut ser = Serializer::new(Vec::with_capacity(size / 8 * 9));
+        ser.set_reverse(true);
+        ser.serialize_bytes(&bytes).unwrap();
+        let encoded_reverse = ser.into_inner();
+
+        group.bench_function(format!("size-{}-reverse", size), |b| {
+            b.iter(|| {
+                let mut de = Deserializer::new(black_box(encoded_reverse.as_slice()));
+                de.set_reverse(true);
+                black_box(de.read_bytes().unwrap());
             });
         });
     }
