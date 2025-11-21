@@ -124,7 +124,7 @@ impl<B: BufMut> MaybeFlip<B> {
 // Format Reference:
 // https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format#memcomparable-format
 // https://haxisnake.github.io/2020/11/06/TIDB源码学习笔记-基本类型编解码方案/
-impl<'a, B: BufMut> ser::Serializer for &'a mut Serializer<B> {
+impl<B: BufMut> ser::Serializer for &mut Serializer<B> {
     type Error = Error;
     type Ok = ();
     type SerializeMap = Self;
@@ -353,7 +353,7 @@ impl<'a, B: BufMut> ser::Serializer for &'a mut Serializer<B> {
     }
 }
 
-impl<'a, B: BufMut> ser::SerializeSeq for &'a mut Serializer<B> {
+impl<B: BufMut> ser::SerializeSeq for &mut Serializer<B> {
     type Error = Error;
     type Ok = ();
 
@@ -373,7 +373,7 @@ impl<'a, B: BufMut> ser::SerializeSeq for &'a mut Serializer<B> {
     }
 }
 
-impl<'a, B: BufMut> ser::SerializeTuple for &'a mut Serializer<B> {
+impl<B: BufMut> ser::SerializeTuple for &mut Serializer<B> {
     type Error = Error;
     type Ok = ();
 
@@ -389,7 +389,7 @@ impl<'a, B: BufMut> ser::SerializeTuple for &'a mut Serializer<B> {
     }
 }
 
-impl<'a, B: BufMut> ser::SerializeTupleStruct for &'a mut Serializer<B> {
+impl<B: BufMut> ser::SerializeTupleStruct for &mut Serializer<B> {
     type Error = Error;
     type Ok = ();
 
@@ -405,7 +405,7 @@ impl<'a, B: BufMut> ser::SerializeTupleStruct for &'a mut Serializer<B> {
     }
 }
 
-impl<'a, B: BufMut> ser::SerializeTupleVariant for &'a mut Serializer<B> {
+impl<B: BufMut> ser::SerializeTupleVariant for &mut Serializer<B> {
     type Error = Error;
     type Ok = ();
 
@@ -421,7 +421,7 @@ impl<'a, B: BufMut> ser::SerializeTupleVariant for &'a mut Serializer<B> {
     }
 }
 
-impl<'a, B: BufMut> ser::SerializeMap for &'a mut Serializer<B> {
+impl<B: BufMut> ser::SerializeMap for &mut Serializer<B> {
     type Error = Error;
     type Ok = ();
 
@@ -444,7 +444,7 @@ impl<'a, B: BufMut> ser::SerializeMap for &'a mut Serializer<B> {
     }
 }
 
-impl<'a, B: BufMut> ser::SerializeStruct for &'a mut Serializer<B> {
+impl<B: BufMut> ser::SerializeStruct for &mut Serializer<B> {
     type Error = Error;
     type Ok = ();
 
@@ -460,7 +460,7 @@ impl<'a, B: BufMut> ser::SerializeStruct for &'a mut Serializer<B> {
     }
 }
 
-impl<'a, B: BufMut> ser::SerializeStructVariant for &'a mut Serializer<B> {
+impl<B: BufMut> ser::SerializeStructVariant for &mut Serializer<B> {
     type Error = Error;
     type Ok = ();
 
@@ -602,7 +602,7 @@ impl<B: BufMut> Serializer<B> {
 
         let mut byte_array = Vec::with_capacity(16);
         // Remove trailing zero.
-        while mantissa % 10 == 0 && mantissa != 0 {
+        while mantissa.is_multiple_of(10) {
             mantissa /= 10;
             digit_num -= 1;
         }

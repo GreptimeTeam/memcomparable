@@ -111,36 +111,105 @@ impl<B: Buf> MaybeFlip<B> {
 
     def_method!(get_u128, u128);
 
-    fn copy_to_slice(&mut self, dst: &mut [u8]) -> Result<()> {
-        self.input.try_copy_to_slice(dst).map_err(|_| Error::Eof)?;
-        if self.flip {
-            dst.iter_mut().for_each(|x| *x = !*x);
-        }
-        Ok(())
-    }
-
     fn is_empty(&self) -> bool {
         self.input.remaining() == 0
     }
 }
 
 impl<B: Buf> Deserializer<B> {
-    fn read_bytes(&mut self) -> Result<Vec<u8>> {
+    /// Read bytes entry
+    pub fn read_bytes(&mut self) -> Result<Vec<u8>> {
         match self.input.get_u8() {
             0 => return Ok(vec![]), // empty slice
             1 => {}                 // non-empty slice
             v => return Err(Error::InvalidBytesEncoding(v)),
         }
-        let mut bytes = vec![];
-        let mut chunk = [0u8; BYTES_CHUNK_UNIT_SIZE]; // chunk + chunk_len
-        loop {
-            self.input.copy_to_slice(&mut chunk)?;
-            match chunk[8] {
+
+        const INDICATOR_OFFSETS: [usize; 7] = [8, 17, 26, 35, 44, 53, 62];
+
+        let flip = self.input.flip;
+        let input = self.input.input.chunk();
+        let mut res = Vec::new();
+        let mut chunks_processed = 0;
+
+        // Process first chunks using cache-friendly access
+        for (chunk_idx, &indicator_offset) in INDICATOR_OFFSETS.iter().enumerate() {
+            if input.len() <= indicator_offset {
+                return Err(Error::Eof);
+            }
+
+            // Read indicator byte, flipping if needed
+            let indicator = if flip {
+                !input[indicator_offset]
+            } else {
+                input[indicator_offset]
+            };
+            let chunk_data_start = chunk_idx * BYTES_CHUNK_UNIT_SIZE;
+
+            match indicator {
                 len @ 1..=8 => {
-                    bytes.extend_from_slice(&chunk[..len as usize]);
-                    return Ok(bytes);
+                    if len == 0 || len > 9 {
+                        return Err(Error::InvalidBytesEncoding(len));
+                    }
+                    if res.is_empty() {
+                        res = input[chunk_data_start..(chunk_data_start + len as usize)].to_vec();
+                    } else {
+                        res.extend_from_slice(
+                            &input[chunk_data_start..(chunk_data_start + len as usize)],
+                        );
+                    }
+                    self.input
+                        .input
+                        .advance((chunk_idx + 1) * BYTES_CHUNK_UNIT_SIZE);
+                    // Flip all accumulated bits in bulk if needed
+                    if flip {
+                        res.iter_mut().for_each(|x| *x = !*x);
+                    }
+                    return Ok(res);
                 }
-                9 => bytes.extend_from_slice(&chunk[..8]),
+                9 => {
+                    // Full chunk, accumulate and continue reading
+                    if res.is_empty() {
+                        res = Vec::with_capacity(64);
+                    }
+                    res.extend_from_slice(
+                        &input[chunk_data_start..(chunk_data_start + BYTES_CHUNK_SIZE)],
+                    );
+                    chunks_processed += 1;
+                }
+                v => return Err(Error::InvalidBytesEncoding(v)),
+            }
+        }
+
+        // Advance past the cached chunks
+        if chunks_processed > 0 {
+            self.input
+                .input
+                .advance(chunks_processed * BYTES_CHUNK_UNIT_SIZE);
+        }
+
+        // Continue reading chunks until we find a non-9 indicator
+        let mut chunk = [0u8; BYTES_CHUNK_UNIT_SIZE];
+        loop {
+            // Read next chunk
+            if self.input.input.remaining() < BYTES_CHUNK_UNIT_SIZE {
+                return Err(Error::Eof);
+            }
+            self.input.input.copy_to_slice(&mut chunk);
+            // Read indicator byte, flipping if needed
+            let indicator = if flip { !chunk[8] } else { chunk[8] };
+            match indicator {
+                len @ 1..=8 => {
+                    res.extend_from_slice(&chunk[..len as usize]);
+                    // Flip all accumulated bits in bulk if needed
+                    if flip {
+                        res.iter_mut().for_each(|x| *x = !*x);
+                    }
+                    return Ok(res);
+                }
+                9 => {
+                    res.extend_from_slice(&chunk[..8]);
+                }
                 v => return Err(Error::InvalidBytesEncoding(v)),
             }
         }
@@ -168,7 +237,7 @@ impl<B: Buf> Deserializer<B> {
 // Format Reference:
 // https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format#memcomparable-format
 // https://haxisnake.github.io/2020/11/06/TIDB源码学习笔记-基本类型编解码方案/
-impl<'de, 'a, B: Buf + 'de> de::Deserializer<'de> for &'a mut Deserializer<B> {
+impl<'de, B: Buf + 'de> de::Deserializer<'de> for &mut Deserializer<B> {
     type Error = Error;
 
     fn deserialize_any<V>(self, _visitor: V) -> Result<V::Value>
@@ -468,20 +537,6 @@ impl<'de, 'a, B: Buf + 'de> de::Deserializer<'de> for &'a mut Deserializer<B> {
     where
         V: Visitor<'de>,
     {
-        impl<'de, 'a, B: Buf + 'de> EnumAccess<'de> for &'a mut Deserializer<B> {
-            type Error = Error;
-            type Variant = Self;
-
-            fn variant_seed<V>(self, seed: V) -> Result<(V::Value, Self::Variant)>
-            where
-                V: DeserializeSeed<'de>,
-            {
-                let idx = self.input.get_u8() as u32;
-                let val: Result<_> = seed.deserialize(idx.into_deserializer());
-                Ok((val?, self))
-            }
-        }
-
         visitor.visit_enum(self)
     }
 
@@ -502,7 +557,7 @@ impl<'de, 'a, B: Buf + 'de> de::Deserializer<'de> for &'a mut Deserializer<B> {
 
 // `VariantAccess` is provided to the `Visitor` to give it the ability to see
 // the content of the single variant that it decided to deserialize.
-impl<'de, 'a, B: Buf + 'de> VariantAccess<'de> for &'a mut Deserializer<B> {
+impl<'de, B: Buf + 'de> VariantAccess<'de> for &mut Deserializer<B> {
     type Error = Error;
 
     fn unit_variant(self) -> Result<()> {
@@ -528,6 +583,20 @@ impl<'de, 'a, B: Buf + 'de> VariantAccess<'de> for &'a mut Deserializer<B> {
         V: Visitor<'de>,
     {
         serde::de::Deserializer::deserialize_tuple(self, fields.len(), visitor)
+    }
+}
+
+impl<'de, B: Buf + 'de> EnumAccess<'de> for &mut Deserializer<B> {
+    type Error = Error;
+    type Variant = Self;
+
+    fn variant_seed<V>(self, seed: V) -> Result<(V::Value, Self::Variant)>
+    where
+        V: DeserializeSeed<'de>,
+    {
+        let idx = self.input.get_u8() as u32;
+        let val: Result<_> = seed.deserialize(idx.into_deserializer());
+        Ok((val?, self))
     }
 }
 
@@ -600,9 +669,10 @@ impl<B: Buf> Deserializer<B> {
 
 #[cfg(test)]
 mod tests {
-    use serde::Deserialize;
-
     use super::*;
+    use crate::{Deserializer, Serializer};
+    use bytes::Bytes;
+    use serde::{Deserialize, Serializer as _};
 
     #[test]
     fn test_unit() {
@@ -753,6 +823,17 @@ mod tests {
             from_slice::<String>(&[2]),
             Err(Error::InvalidBytesEncoding(2))
         );
+    }
+
+    #[test]
+    fn test_long_string() {
+        let s = "a".repeat(100);
+        let mut serializer = Serializer::new(vec![]);
+        serializer.serialize_str(&s).unwrap();
+        let mut bytes = Bytes::from(serializer.into_inner());
+        let mut deserializer = Deserializer::new(&mut bytes);
+        let string = String::deserialize(&mut deserializer).unwrap();
+        assert_eq!(string, s);
     }
 
     #[test]
