@@ -111,14 +111,6 @@ impl<B: Buf> MaybeFlip<B> {
 
     def_method!(get_u128, u128);
 
-    fn copy_to_slice(&mut self, dst: &mut [u8]) -> Result<()> {
-        self.input.try_copy_to_slice(dst).map_err(|_| Error::Eof)?;
-        if self.flip {
-            dst.iter_mut().for_each(|x| *x = !*x);
-        }
-        Ok(())
-    }
-
     fn is_empty(&self) -> bool {
         self.input.remaining() == 0
     }
@@ -127,48 +119,15 @@ impl<B: Buf> MaybeFlip<B> {
 impl<B: Buf> Deserializer<B> {
     /// Read bytes entry
     pub fn read_bytes(&mut self) -> Result<Vec<u8>> {
-        if !self.input.flip {
-            return self.read_bytes_fast();
-        }
-        match self.input.get_u8() {
-            0 => return Ok(vec![]), // empty slice
-            1 => {}                 // non-empty slice
-            v => return Err(Error::InvalidBytesEncoding(v)),
-        }
-        let mut bytes = vec![];
-        let mut chunk = [0u8; BYTES_CHUNK_UNIT_SIZE]; // chunk + chunk_len
-        loop {
-            self.input.copy_to_slice(&mut chunk)?;
-            match chunk[8] {
-                len @ 1..=8 => {
-                    bytes.extend_from_slice(&chunk[..len as usize]);
-                    return Ok(bytes);
-                }
-                9 => bytes.extend_from_slice(&chunk[..8]),
-                v => return Err(Error::InvalidBytesEncoding(v)),
-            }
-        }
-    }
-
-    /// Fast implementation for reading bytes from memcomparable format with the premise that
-    /// most bytes fit into one cache line.
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(Vec<u8>)` - The deserialized byte array
-    /// - `Err(Error::Eof)` - If there's not enough data in the buffer
-    /// - `Err(Error::InvalidBytesEncoding)` - If the encoding is invalid
-    ///
-    fn read_bytes_fast(&mut self) -> Result<Vec<u8>> {
         match self.input.get_u8() {
             0 => return Ok(vec![]), // empty slice
             1 => {}                 // non-empty slice
             v => return Err(Error::InvalidBytesEncoding(v)),
         }
 
-        const MAX_CACHE_CHUNKS: usize = 7;
-        const INDICATOR_OFFSETS: [usize; MAX_CACHE_CHUNKS] = [8, 17, 26, 35, 44, 53, 62];
+        const INDICATOR_OFFSETS: [usize; 7] = [8, 17, 26, 35, 44, 53, 62];
 
+        let flip = self.input.flip;
         let input = self.input.input.chunk();
         let mut res = Vec::new();
         let mut chunks_processed = 0;
@@ -179,7 +138,12 @@ impl<B: Buf> Deserializer<B> {
                 return Err(Error::Eof);
             }
 
-            let indicator = input[indicator_offset];
+            // Read indicator byte, flipping if needed
+            let indicator = if flip {
+                !input[indicator_offset]
+            } else {
+                input[indicator_offset]
+            };
             let chunk_data_start = chunk_idx * BYTES_CHUNK_UNIT_SIZE;
 
             match indicator {
@@ -197,6 +161,10 @@ impl<B: Buf> Deserializer<B> {
                     self.input
                         .input
                         .advance((chunk_idx + 1) * BYTES_CHUNK_UNIT_SIZE);
+                    // Flip all accumulated bits in bulk if needed
+                    if flip {
+                        res.iter_mut().for_each(|x| *x = !*x);
+                    }
                     return Ok(res);
                 }
                 9 => {
@@ -228,10 +196,13 @@ impl<B: Buf> Deserializer<B> {
                 return Err(Error::Eof);
             }
             self.input.input.copy_to_slice(&mut chunk);
-            match chunk[8] {
+            // Read indicator byte, flipping if needed
+            let indicator = if flip { !chunk[8] } else { chunk[8] };
+            match indicator {
                 len @ 1..=8 => {
                     res.extend_from_slice(&chunk[..len as usize]);
-                    if self.input.flip {
+                    // Flip all accumulated bits in bulk if needed
+                    if flip {
                         res.iter_mut().for_each(|x| *x = !*x);
                     }
                     return Ok(res);
@@ -266,7 +237,7 @@ impl<B: Buf> Deserializer<B> {
 // Format Reference:
 // https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format#memcomparable-format
 // https://haxisnake.github.io/2020/11/06/TIDB源码学习笔记-基本类型编解码方案/
-impl<'de, 'a, B: Buf + 'de> de::Deserializer<'de> for &'a mut Deserializer<B> {
+impl<'de, B: Buf + 'de> de::Deserializer<'de> for &mut Deserializer<B> {
     type Error = Error;
 
     fn deserialize_any<V>(self, _visitor: V) -> Result<V::Value>
@@ -586,7 +557,7 @@ impl<'de, 'a, B: Buf + 'de> de::Deserializer<'de> for &'a mut Deserializer<B> {
 
 // `VariantAccess` is provided to the `Visitor` to give it the ability to see
 // the content of the single variant that it decided to deserialize.
-impl<'de, 'a, B: Buf + 'de> VariantAccess<'de> for &'a mut Deserializer<B> {
+impl<'de, B: Buf + 'de> VariantAccess<'de> for &mut Deserializer<B> {
     type Error = Error;
 
     fn unit_variant(self) -> Result<()> {
@@ -615,7 +586,7 @@ impl<'de, 'a, B: Buf + 'de> VariantAccess<'de> for &'a mut Deserializer<B> {
     }
 }
 
-impl<'de, 'a, B: Buf + 'de> EnumAccess<'de> for &'a mut Deserializer<B> {
+impl<'de, B: Buf + 'de> EnumAccess<'de> for &mut Deserializer<B> {
     type Error = Error;
     type Variant = Self;
 
